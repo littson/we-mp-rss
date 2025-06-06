@@ -17,6 +17,8 @@ from apis.message_task import router as task_router
 from apis.sys_info import router as sys_info_router
 import apis
 import os
+import logging
+import uvicorn
 from core.config import cfg,VERSION,API_BASE
 
 app = FastAPI(
@@ -90,6 +92,14 @@ async def serve_vue_app(request: Request, path: str):
         return FileResponse(index_path)
     
     return {"error": "Not Found"}, 404
+
+@app.on_event("startup")
+async def startup_event():
+    logger = logging.getLogger("uvicorn.access")
+    console_formatter = uvicorn.logging.ColourizedFormatter(
+        "{asctime} {levelprefix} : {message}",
+        style="{", use_colors=True)
+    logger.handlers[0].setFormatter(console_formatter)
 
 @app.get("/",tags=['默认'],include_in_schema=False)
 async def serve_root(request: Request):
