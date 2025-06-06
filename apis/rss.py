@@ -1,7 +1,9 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query, HTTPException, Request,Response
 from fastapi import status
 from fastapi.responses import Response
 from core.db import DB
+from core.log import logger
 from core.rss import RSS
 from core.models.feed import Feed
 from .base import success_response, error_response
@@ -54,7 +56,7 @@ async def get_rss_feeds(
     request: Request,
     limit: int = Query(100, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    is_update:bool=False,
+    is_update:bool=True,
     # current_user: dict = Depends(get_current_user)
 ):
     rss=RSS(name=f'all_{limit}_{offset}')
@@ -68,14 +70,15 @@ async def get_rss_feeds(
     try:
         total = session.query(Feed).count()
         feeds = session.query(Feed).order_by(Feed.created_at.desc()).limit(limit).offset(offset).all()
-        rss_domain=cfg.get("rss_base_url",request.base_url)
+        rss_domain = cfg.get("rss_base_url",request.base_url)
         # 转换为RSS格式数据
         rss_list = [{
             "id": str(feed.id),
             "title": feed.mp_name,
             "link":  f"{rss_domain}rss/{feed.id}",
             "description": feed.mp_intro,
-            "updated": feed.created_at.isoformat()
+            # "updated": feed.created_at.isoformat()
+            "pubDate": datetime.strftime(datetime.fromtimestamp(feed.update_time), "%Y/%m/%d %H:%M:%S")
         } for feed in feeds]
         
         # 生成RSS XML
@@ -86,7 +89,8 @@ async def get_rss_feeds(
             media_type="application/xml"
         )
     except Exception as e:
-        print(f"获取RSS订阅列表错误: {str(e)}")
+        # print(f"获取RSS订阅列表错误: {str(e)}")
+        logger.exception(f"获取RSS订阅列表错误: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
             detail=error_response(
@@ -168,7 +172,9 @@ async def get_mp_articles_rss(
     feed_id: str,
     limit: int = Query(100, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    is_update:bool=False
+    is_update:bool=False,
+    original_link:bool=True,
+    cache_content:bool=False,
     # current_user: dict = Depends(get_current_user)
 ):
     rss=RSS(name=f'{feed_id}_{limit}_{offset}')
@@ -202,23 +208,25 @@ async def get_mp_articles_rss(
         rss_list = [{
             "id": str(article.id),
             "title": article.title,
-            "link":  f"{request.base_url}rss/feed/{article.id}",
+            "link":  f"{article.url}" if original_link else f"{request.base_url}rss/feed/{article.id}",
             "description": article.description ,
-            "updated": article.updated_at.isoformat()
+            "pubDate": datetime.strftime(datetime.fromtimestamp(article.publish_time), "%Y/%m/%d %H:%M:%S")
+            # "updated": article.updated_at.isoformat()
         } for article in articles]
         
 
         # 缓存文章内容
-        for article in articles:
-            content_data = {
-                "id": article.id,
-                "title": article.title,
-                "content": article.content,
-                "publish_time": article.publish_time,
-                "mp_id": article.mp_id,
-                "mp_name": feed.mp_name
-            }
-            rss.cache_content(article.id, content_data)
+        if cache_content:
+            for article in articles:
+                content_data = {
+                    "id": article.id,
+                    "title": article.title,
+                    "content": article.content,
+                    "publish_time": article.publish_time,
+                    "mp_id": article.mp_id,
+                    "mp_name": feed.mp_name
+                }
+                rss.cache_content(article.id, content_data)
         
         # 生成RSS XML
         rss_xml = rss.generate_rss(rss_list, title=f"{feed.mp_name}")

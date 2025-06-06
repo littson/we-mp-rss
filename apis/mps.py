@@ -6,6 +6,7 @@ from .base import success_response, error_response
 from datetime import datetime
 from core.config import cfg
 from core.res import save_avatar_locally
+from core.log import logger
 router = APIRouter(prefix=f"/mps", tags=["公众号管理"])
 def UpdateArticle(art:dict):
             return DB.add_article(art)
@@ -119,7 +120,8 @@ async def update_mps(
             "mps":mp
         })
     except Exception as e:
-        print(f"更新公众号文章: {str(e)}",e)
+        # print(f"更新公众号文章: {str(e)}",e)
+        logger.exception(f"更新公众号文章: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_201_CREATED,
             detail=error_response(

@@ -79,7 +79,8 @@ class RSS:
             # ET.SubElement(item, "category").text = rss_item["category"]
             # ET.SubElement(item, "author").text = rss_item["author"]
             ET.SubElement(item, "link").text = rss_item["link"]
-            ET.SubElement(item, "pubDate").text = self.datetime_to_rfc822(str(rss_item["updated"]))
+            ET.SubElement(item, "pubDate").text = rss_item["pubDate"]
+            # ET.SubElement(item, "pubDate").text = self.datetime_to_rfc822(str(rss_item["updated"]))
 
         # 生成XML字符串(添加声明和美化输出)
         tree_str = '<?xml version="1.0" encoding="utf-8"?>\r\n' + \
@@ -99,6 +100,8 @@ class RSS:
         Returns:
             处理后的字符串，所有图片URL前添加了前缀
         """
+        if not text:
+            return text
         import re
         pattern = re.compile(r'(<img[^>]*src=["\'])(?!\/static\/res\/logo\/)([^"\']*)', re.IGNORECASE)
         return pattern.sub(r'\1/static/res/logo/\2', text)

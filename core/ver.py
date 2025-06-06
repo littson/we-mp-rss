@@ -1,14 +1,13 @@
 import requests
+from core.log import logger
 try:
-    response = requests.get('https://api.github.com/repos/rachelos/we-mp-rss/releases/latest')
+    response = requests.get('https://api.github.com/repos/rachelos/we-mp-rss/releases/latest', timeout=2)
     response.raise_for_status()  # 检查请求是否成功
     data = response.json()
     LATEST_VERSION = data.get('tag_name', '').replace('v', '')
-except requests.RequestException as e:
+except Exception as e:
     print(f"Failed to fetch latest version: {e}")
-    LATEST_VERSION = ''
-except ValueError as e:
-    print(f"Failed to parse JSON response: {e}")
+    logger.exception("Failed to fetch latest version from GitHub")
     LATEST_VERSION = ''
 
 #API接口前缀
