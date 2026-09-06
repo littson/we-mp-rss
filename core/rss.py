@@ -2,7 +2,32 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 import os
 import json
+import re
 from core.content_format import format_content
+
+CONTENT_NAMESPACE = "http://purl.org/rss/1.0/modules/content/"
+ET.register_namespace("content", CONTENT_NAMESPACE)
+
+
+def article_rss_link(article, rss_domain: str, local: bool = False) -> str:
+    """Return a clickable item URL even for legacy rows with an empty source URL."""
+    source_url = str(article.url or "").strip()
+    if source_url and not local:
+        return source_url
+    if not local:
+        try:
+            publish_info = json.loads(article.publish_info or "{}")
+        except (TypeError, ValueError):
+            publish_info = {}
+        original_id = str(publish_info.get("original_id") or "").strip()
+        if (
+            publish_info.get("source") == "weread"
+            and re.fullmatch(r"[A-Za-z0-9_~-]+", original_id)
+        ):
+            return f"https://mp.weixin.qq.com/s/{original_id}"
+    return f"{rss_domain.rstrip('/')}/views/article/{article.id}"
+
+
 class RSS:
     cache_dir = os.path.normpath("data/cache/rss")
     content_cache_dir = os.path.normpath("data/cache/content")
@@ -105,8 +130,6 @@ class RSS:
         
         # 创建根元素(RSS标准)
         rss = ET.Element("rss", version="2.0")
-        if full_context==True:
-            rss.attrib["xmlns:content"] = "http://purl.org/rss/1.0/modules/content/"
         channel=ET.SubElement(rss, "channel")
         # 设置渠道信息
         ET.SubElement(channel, "title").text = title
@@ -129,7 +152,17 @@ class RSS:
             ET.SubElement(item, "id").text = rss_item["id"]
             ET.SubElement(item, "title").text = rss_item["title"]
             ET.SubElement(item, "description").text = rss_item["description"] 
-            ET.SubElement(item, "guid").text = rss_item["link"]
+            guid_value = rss_item.get("guid")
+            if guid_value is None:
+                guid_value = rss_item["link"] or rss_item["id"]
+            guid_is_permalink = rss_item.get(
+                "guid_is_permalink",
+                bool(rss_item["link"]),
+            )
+            guid = ET.SubElement(item, "guid")
+            guid.text = str(guid_value)
+            if not guid_is_permalink:
+                guid.set("isPermaLink", "false")
             # 添加图片封面
             if cfg.get("rss.add_cover",False)==True:
                 enclosure = ET.SubElement(item, "enclosure")
@@ -142,7 +175,7 @@ class RSS:
                         content = f"<![CDATA[{str(rss_item['content'])}]]>"  # 使用CDATA包裹内容
                     else:
                         content = str(rss_item['content'])
-                    ET.SubElement(item, "content:encoded").text = content
+                    ET.SubElement(item, f"{{{CONTENT_NAMESPACE}}}encoded").text = content
                 except Exception as e:
                     print(f"Error adding content:encoded element: {e}")
                 pass
@@ -180,8 +213,6 @@ class RSS:
         
         # 创建根元素(Atom标准)
         feed = ET.Element("feed", xmlns="http://www.w3.org/2005/Atom")
-        if full_context==True:
-            feed.attrib["xmlns:content"] = "http://purl.org/rss/1.0/modules/content/"
         ET.SubElement(feed, "title").text = title
         ET.SubElement(feed, "link",rel="alternate", href=link)
         ET.SubElement(feed, "link",rel="icon", href=image_url)
@@ -221,7 +252,7 @@ class RSS:
                     if cfg.get("rss.cdata",False)==True:
                         content = f"<![CDATA[{content}]]>"  # 使用CDATA包裹内容
                     else:
-                        ET.SubElement(entry, "content:encoded").text = content
+                        ET.SubElement(entry, f"{{{CONTENT_NAMESPACE}}}encoded").text = content
                 except Exception as e:
                     print(f"Error adding content:encoded element: {e}")
                 pass

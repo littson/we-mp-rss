@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request,Response
 from fastapi import status
 from fastapi.responses import Response
 from core.db import DB
-from core.rss import RSS
+from core.rss import RSS, article_rss_link
 from core.models.feed import Feed
 import json
 from .base import success_response, error_response
@@ -19,6 +19,8 @@ def clamp_rss_limit(limit: int) -> int:
     if max_items < 1:
         max_items = default_page_size if default_page_size > 0 else 30
     return min(limit, max_items)
+
+
 def verify_rss_access(current_user: dict = Depends(get_current_user)):
     """
     RSS访问认证方法
@@ -260,7 +262,13 @@ async def get_mp_articles_source(
         rss_list = [{
             "id": str(article.id),
             "title": article.title or "",
-            "link":  f"{rss_domain}/views/article/{article.id}" if cfg.get("rss.local",False) else article.url,
+            "link": article_rss_link(
+                article,
+                rss_domain,
+                local=bool(cfg.get("rss.local", False)),
+            ),
+            "guid": article.url or str(article.id),
+            "guid_is_permalink": bool(article.url),
             "description": article.description if article.description != "" else article.title or "",
             "content": article.content or "",
             "image": article.pic_url or "",

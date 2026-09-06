@@ -25,6 +25,7 @@ from core.print import print_warning
 from core.switch_job import get_manager as get_switch_job_manager
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 
 router = APIRouter(prefix=f"/auth", tags=["认证"])
 from driver.success import Success
@@ -51,6 +52,17 @@ async def qr_image(current_user=Depends(get_current_user)):
 async def qr_status(current_user=Depends(get_current_user)):
     #  from driver.success import  getStatus
      return success_response(WX_API.QrStatus())    
+
+
+@router.get("/qr/last-login", summary="获取最近扫码登录时间")
+async def qr_last_login(current_user=Depends(get_current_user)):
+    from driver.token import _get_token_data
+    token_data = _get_token_data() or {}
+    value = token_data.get("last_login_time")
+    return success_response({
+        "last_login_time": value,
+        "last_login_time_text": datetime.fromtimestamp(value).isoformat() if value else None,
+    })
 @router.get("/qr/over",summary="扫码完成")
 async def qr_success(current_user=Depends(get_current_user)):
      return success_response(await WX_API.Close())    

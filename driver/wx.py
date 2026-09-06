@@ -30,6 +30,8 @@ class Wx:
     CallBack=None
     Notice=None
     ext_data = None
+    QrState = "idle"
+    QrError = None
     # 添加线程锁保护共享变量
     _login_lock = Lock()
     def __init__(self):
@@ -314,6 +316,8 @@ class Wx:
                 "msg":"微信公众平台登录脚本正在运行，请勿重复运行！"}
 
         self.Clean()
+        self.QrState = "preparing"
+        self.QrError = None
         print("子线程执行中")
 
         def run_wxLogin():
@@ -349,7 +353,12 @@ class Wx:
         except Exception as e:
             raise Exception(f"浏览器关闭")  # 重新抛出异常以便外部捕获处理
     def QrStatus(self):
-        return {"login_status":self.HasLogin(),"qr_code":self.GetHasCode()}
+        return {
+            "login_status": self.HasLogin(),
+            "qr_code": self.GetHasCode(),
+            "state": self.QrState,
+            "error": self.QrError,
+        }
 
     def HasLogin(self):
         with self._login_lock:
@@ -533,13 +542,16 @@ class Wx:
             # 清理现有资源
             self.cleanup_resources()
 
-            self.controller = PlaywrightController()
+            # 微信登录页对异常请求头和反检测脚本较敏感，使用普通浏览器上下文。
+            self.controller = PlaywrightController(apply_anti_crawler=False)
             # 初始化浏览器控制器
             driver = self.controller
             # 启动浏览器并打开微信公众平台
             print_info("正在启动浏览器...")
             await driver.start_browser()
-            await driver.open_url(self.WX_LOGIN)
+            opened = await driver.open_url(self.WX_LOGIN)
+            if not opened or not driver.is_page_valid():
+                raise RuntimeError("微信登录页面打开失败，浏览器已关闭")
             page = driver.page
 
             # 等待页面完全加载
@@ -568,6 +580,8 @@ class Wx:
 
             print("二维码已保存为 wx_qrcode.png，请扫码登录...")
             self.HasCode = True
+            self.QrState = "ready"
+            self.QrError = None
             if os.path.getsize(self.wx_login_url) <= 364:
                 raise Exception("二维码图片获取失败，请重新扫码")
             # 等待登录成功（检测二维码图片加载完成）
@@ -589,10 +603,13 @@ class Wx:
             from .success import setStatus
             with self._login_lock:
                 self._haslogin = True
+            self.QrState = "completed"
             setStatus(True)
             self.CallBack = CallBack
             await self.Call_Success()
         except Exception as e:
+            self.QrState = "failed"
+            self.QrError = str(e) or "二维码生成失败"
             if "Timeout" in str(e):
                 print_warning("\n扫码登录超时，请重新运行程序进行扫码登录")
 

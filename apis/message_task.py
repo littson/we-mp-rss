@@ -19,6 +19,16 @@ from .base import success_response, error_response
 
 router = APIRouter(prefix="/message_tasks", tags=["消息任务"])
 
+
+def _reload_schedules():
+    try:
+        from jobs.mps import reload_job
+        from jobs.cascade_task_dispatcher import cascade_schedule_service
+        reload_job()
+        cascade_schedule_service.reload()
+    except Exception as error:
+        print_error(f"重载调度任务失败: {error}")
+
 @router.get("", summary="获取消息任务列表")
 async def list_message_tasks(
     limit: int = Query(10, ge=1, le=100),
@@ -267,6 +277,7 @@ async def create_message_task(
         db.add(db_task)
         db.commit()
         db.refresh(db_task)
+        _reload_schedules()
         return success_response(data=db_task)
     except Exception as e:
         db.rollback()
@@ -320,6 +331,7 @@ async def update_message_task(
             db_task.cookies = task_data.cookies
         db.commit()
         db.refresh(db_task)
+        _reload_schedules()
         return success_response(data=db_task)
     except Exception as e:
         db.rollback()
@@ -331,10 +343,7 @@ async def fresh_message_task(
     """
     重载任务
     """
-    from jobs.mps import reload_job
-    reload_job()
-    from jobs.cascade_task_dispatcher import cascade_schedule_service
-    cascade_schedule_service.reload()
+    _reload_schedules()
     return success_response(message="任务已经重载成功")
 @router.delete("/{task_id}",summary="删除消息任务")
 async def delete_message_task(
@@ -362,6 +371,7 @@ async def delete_message_task(
         
         db.delete(db_task)
         db.commit()
+        _reload_schedules()
         return success_response(message="Message task deleted successfully")
     except Exception as e:
         db.rollback()

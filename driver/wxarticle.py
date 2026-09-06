@@ -10,6 +10,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict
 from bs4 import BeautifulSoup
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .playwright_driver import PlaywrightController
 from core.print import print_error, print_info, print_success, print_warning
@@ -36,6 +37,98 @@ class WXArticleFetcher:
         """关闭浏览器（异步）"""
         if self.controller:
             await self.controller.Close()
+
+    @staticmethod
+    def _validate_article_url(url: str):
+        parsed = urlparse(str(url or "").strip())
+        if (
+            parsed.scheme not in {"http", "https"}
+            or (parsed.hostname or "").lower() != "mp.weixin.qq.com"
+            or not parsed.path.startswith("/s/")
+        ):
+            raise ValueError("请输入有效的微信公众号文章链接")
+        return parsed
+
+    @staticmethod
+    def _decode_numeric_biz(biz: str) -> str:
+        value = unquote(str(biz or "").strip())
+        if not value:
+            raise ValueError("文章页面未返回公众号唯一 ID")
+        padded = value + "=" * (-len(value) % 4)
+        try:
+            decoded = base64.b64decode(padded, validate=True).decode("utf-8")
+        except Exception as exc:
+            raise ValueError("公众号唯一 ID 格式无效") from exc
+        if not decoded.isdigit():
+            raise ValueError("公众号唯一 ID 格式无效")
+        return decoded
+
+    async def get_mp_identity(self, url: str) -> Dict:
+        """读取文章发布者身份，不扫描正文中的其他公众号链接。"""
+        target_url = str(url or "").strip()
+        parsed = self._validate_article_url(target_url)
+        direct_biz = (parse_qs(parsed.query).get("__biz") or [""])[0]
+        browser_type = cfg.get(
+            "gather.browser_type",
+            cfg.get("weread.browser_type", "firefox"),
+        )
+        async with PlaywrightController(
+            proxy_url=self.browser_proxy_url,
+            mobile_mode=True,
+            browser_type=browser_type,
+            apply_anti_crawler=False,
+        ) as controller:
+            success = await controller.open_url(target_url, timeout=self.wait_timeout)
+            if not success:
+                raise ValueError("公众号文章页面加载失败")
+            page = controller.page
+            page_data = {}
+            for _ in range(10):
+                page_data = await page.evaluate(
+                    """() => ({
+                        biz: window.biz || '',
+                        nickname: window.cgiDataNew?.nick_name || '',
+                        userName: window.cgiDataNew?.user_name || '',
+                        alias: window.cgiDataNew?.alias || ''
+                    })"""
+                ) or {}
+                if page_data.get("biz") or direct_biz:
+                    break
+                await asyncio.sleep(0.5)
+            biz = page_data.get("biz") or direct_biz
+            numeric_id = self._decode_numeric_biz(biz)
+            mp_name = page_data.get("nickname") or ""
+            if not mp_name:
+                try:
+                    mp_name = await page.locator(
+                        'meta[property="og:article:author"]'
+                    ).get_attribute("content", timeout=3000)
+                except Exception:
+                    mp_name = ""
+            logo = ""
+            for selector in (
+                "#js_like_profile_bar .wx_follow_avatar img",
+                "#js_like_profile_bar img.wx_follow_avatar_pic",
+                ".wx_follow_avatar img",
+                'meta[property="og:image"]',
+            ):
+                try:
+                    attribute = "content" if selector.startswith("meta") else "src"
+                    logo = await page.locator(selector).get_attribute(
+                        attribute, timeout=2000
+                    )
+                    if logo:
+                        break
+                except Exception:
+                    continue
+            return {
+                "mp_info": {
+                    "mp_name": str(mp_name or ""),
+                    "logo": str(logo or ""),
+                    "biz": str(biz),
+                },
+                "mp_id": f"MP_WXS_{numeric_id}",
+            }
 
     async def get_article_content(self, url: str) -> Dict:
         """
@@ -80,7 +173,9 @@ class WXArticleFetcher:
             # 使用异步上下文管理器
             async with PlaywrightController(
                 proxy_url=self.browser_proxy_url,
-                mobile_mode=True
+                mobile_mode=True,
+                browser_type=cfg.get("gather.browser_type", "firefox"),
+                apply_anti_crawler=False,
             ) as controller:
 
                 # 打开URL
@@ -145,9 +240,10 @@ class WXArticleFetcher:
                 info["article_type"] = article_type
 
                 # 获取内容
-                content = await page.locator('#js_content').inner_html()
-                if not content:
-                    content = await page.locator('#js_article').inner_html()
+                content = await page.evaluate(
+                    "() => document.querySelector('#js_content')?.innerHTML "
+                    "|| document.querySelector('#js_article')?.innerHTML || ''"
+                )
 
                 # 模拟滚动页面到底部，触发懒加载图片
                 try:
@@ -156,11 +252,15 @@ class WXArticleFetcher:
                     print_warning(f"滚动加载图片失败: {e}")
 
                 # 重新获取内容（滚动后可能有更多图片加载）
-                content = await page.locator('#js_content').inner_html()
-                if not content:
-                    content = await page.locator('#js_article').inner_html()
-
-                content=Web.clean_article_content(str(content))
+                content = await page.evaluate(
+                    "() => document.querySelector('#js_content')?.innerHTML "
+                    "|| document.querySelector('#js_article')?.innerHTML || ''"
+                )
+                if content:
+                    content = Web.clean_article_content(str(content))
+                else:
+                    from core.wx.content import parse_article_content
+                    content = parse_article_content(body) or ""
                 # 更新基本信息
                 info["title"] = title or ""
                 info["author"] = author or ""
@@ -216,7 +316,8 @@ class WXArticleFetcher:
                         pass
 
                     if not biz:
-                        biz = self._extract_biz(url, content or "")
+                        parsed = self._validate_article_url(url)
+                        biz = (parse_qs(parsed.query).get("__biz") or [""])[0]
 
                     info["mp_info"] = {
                         "mp_name": mp_name or "未知公众号",
@@ -227,8 +328,8 @@ class WXArticleFetcher:
                     # 生成 mp_id
                     if biz:
                         try:
-                            info["mp_id"] = "MP_WXS_" + base64.b64decode(biz).decode("utf-8")
-                        except Exception:
+                            info["mp_id"] = "MP_WXS_" + self._decode_numeric_biz(biz)
+                        except ValueError:
                             info["mp_id"] = ""
 
                 except Exception as e:
@@ -483,18 +584,13 @@ class WXArticleFetcher:
             
     def _extract_biz(self, url: str, content: str) -> str:
         """
-        提取 biz 参数
+        仅从当前文章 URL 提取 biz 参数。
+
+        不扫描正文，避免把文章中引用的其他公众号识别为发布者。
         """
-        # 从 URL 提取
         match = re.search(r'[?&]__biz=([^&]+)', url)
         if match:
             return match.group(1)
-            
-        # 从内容提取
-        match = re.search(r'var\s+biz\s*=\s*["\']([^"\']+)["\']', content)
-        if match:
-            return match.group(1)
-            
         return ""
 
     def extract_id_from_url(self, url: str) -> str:

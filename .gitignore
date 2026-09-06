@@ -2,6 +2,10 @@ __pycache__
 *.xml
 *.tmp
 config.yaml
+/db.db
+/db.db-shm
+/db.db-wal
+/qrcode.png
 dist/
 build/
 static/anti_bot*
@@ -15,6 +19,8 @@ dock_build.bat
 item
 static/cache
 static/wx_qrcode.png
+static/weread_qrcode.png
+data/weread_cookies.lic
 data
 build
 dist

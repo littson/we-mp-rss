@@ -2,6 +2,7 @@ import threading
 import random
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from typing import Callable, Any, Optional
 from core.log import logger
 import uuid
@@ -181,6 +182,40 @@ class TaskScheduler:
                 del self._jobs[job_id]
                 return True
             return False
+
+    def add_interval_job(
+        self,
+        func: Callable,
+        *,
+        days: int = 0,
+        seconds: int = 0,
+        args=None,
+        kwargs=None,
+        job_id: Optional[str] = None,
+        start_date=None,
+        tag: str = "",
+    ) -> str:
+        """Add a fixed interval job using the same safety defaults as cron jobs."""
+        with self._lock:
+            job_id = job_id or str(uuid.uuid4())
+            trigger = IntervalTrigger(
+                days=days,
+                seconds=seconds,
+                start_date=start_date,
+            )
+            job = self._scheduler.add_job(
+                func,
+                trigger=trigger,
+                args=args,
+                kwargs=kwargs,
+                id=str(job_id),
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=300,
+            )
+            self._jobs[job.id] = job
+            logger.info(f"Successfully added interval job {tag} {job.id}")
+            return job.id
     
     def clear_all_jobs(self) -> int:
         """

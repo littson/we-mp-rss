@@ -3,6 +3,7 @@ from core.config import Config,cfg
 # 确保data目录和wx.lic文件存在
 import os
 import json
+import time
 from core.print import print_success, print_warning
 from core.redis_client import redis_client
 
@@ -29,6 +30,7 @@ def set_token(data:any,ext_data:any=None):
         "cookie": data.get("cookies_str", ""),
         "fingerprint": data.get("fingerprint", ""),
         "expiry": data.get("expiry", {}),
+        "last_login_time": int(time.time()),
     }
     if ext_data is not None:
         token_data["ext_data"] = ext_data

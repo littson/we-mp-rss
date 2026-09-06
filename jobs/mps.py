@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from core.models.article import Article
 from .article import UpdateArticle,Update_Over
 import core.db as db
@@ -78,29 +79,30 @@ def do_job(mp=None,task:MessageTask=None,isTest=False):
                     count = wx.all_count() if wx else 0
                     mock_articles = wx.articles if wx else []
                     all_count += count
+                    from .feed_frequency import mark_feed_result
+                    mark_feed_result(mp.id, success)
 
-            # 执行 webhook 通知
-            try:
-                from jobs.webhook import MessageWebHook
-                tms=MessageWebHook(task=task,feed=mp,articles=mock_articles)
-                web_hook(tms, is_test=isTest)
-                print_success(f"任务({task.id})[{mp.mp_name}]执行成功,{count}成功条数")
-                
-                # 采集成功，清除该公众号的环境异常记录
-                if not isTest and success and count > 0:
-                    try:
-                        clear_env_exception(mp_id=mp.id)
-                    except Exception as e:
-                        print_error(f"清除环境异常记录失败: {e}")
-                        
-            except Exception as e:
-                print_error(f"Webhook执行失败 [{mp.mp_name}]: {e}")
-                if not error_msg:
-                    error_msg = f"Webhook: {str(e)}"
+            # 自适应采集没有消息任务，只在显式消息任务中发送 webhook。
+            if task is not None:
+                try:
+                    from jobs.webhook import MessageWebHook
+                    tms=MessageWebHook(task=task,feed=mp,articles=mock_articles)
+                    web_hook(tms, is_test=isTest)
+                    print_success(f"任务({task.id})[{mp.mp_name}]执行成功,{count}成功条数")
+                except Exception as e:
+                    print_error(f"Webhook执行失败 [{mp.mp_name}]: {e}")
+                    if not error_msg:
+                        error_msg = f"Webhook: {str(e)}"
+
+            if not isTest and success and count > 0:
+                try:
+                    clear_env_exception(mp_id=mp.id)
+                except Exception as e:
+                    print_error(f"清除环境异常记录失败: {e}")
             
             # 级联节点：上报任务执行结果到父节点
             from jobs.cascade_sync import cascade_sync_service
-            if not isTest and mock_articles:
+            if task is not None and not isTest and mock_articles:
                 import asyncio
                 try:
                     result_data = [{
@@ -239,6 +241,62 @@ def get_feeds(task:MessageTask=None):
         mps=wx_db.get_all_mps()
      return mps
 scheduler=TaskScheduler()
+
+
+def add_frequency_job(frequency: str):
+    from .feed_frequency import get_feeds_by_frequency
+    feeds = get_feeds_by_frequency(frequency)
+    if not feeds:
+        logger.info(f"{frequency}频订阅源为空，跳过本次抓取")
+        return
+    add_job(feeds=feeds)
+
+
+def _next_frequency_stats_time():
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    start = now.replace(hour=3, minute=0, second=0, microsecond=0)
+    if start <= now:
+        start += timedelta(days=1)
+    return start
+
+
+def start_frequency_jobs():
+    from .feed_frequency import (
+        FREQUENCY_DAILY,
+        FREQUENCY_THREE_DAY,
+        FREQUENCY_TWICE_DAILY,
+        update_frequency_statistics,
+    )
+    scheduler.add_cron_job(
+        add_frequency_job,
+        "0 6,23 * * *",
+        args=[FREQUENCY_TWICE_DAILY],
+        job_id="mp_twice_daily",
+        tag="自适应采集",
+    )
+    scheduler.add_cron_job(
+        add_frequency_job,
+        "0 23 * * *",
+        args=[FREQUENCY_DAILY],
+        job_id="mp_daily",
+        tag="自适应采集",
+    )
+    scheduler.add_cron_job(
+        add_frequency_job,
+        "0 23 */3 * *",
+        args=[FREQUENCY_THREE_DAY],
+        job_id="mp_three_day",
+        tag="自适应采集",
+    )
+    scheduler.add_interval_job(
+        update_frequency_statistics,
+        days=14,
+        job_id="mp_frequency_stats",
+        start_date=_next_frequency_stats_time(),
+        tag="频率统计",
+    )
+
+
 def reload_job():
     print_success("重载任务")
     scheduler.clear_all_jobs()
@@ -261,11 +319,11 @@ def run(job_id:str=None,isTest=False):
     return tasks
 def start_job(job_id:str=None):
     from .taskmsg import get_message_task
+    requested_job_id = job_id
     tasks=get_message_task(job_id)
     if not tasks:
-        print("没有任务")
-        return
-    tag="定时采集"
+        print("没有消息任务")
+        tasks = []
     for task in tasks:
         cron_exp=task.cron_exp
         if not cron_exp:
@@ -275,6 +333,8 @@ def start_job(job_id:str=None):
         # 修改：使用关键字参数传递 task，避免与 feeds 混淆
         job_id=scheduler.add_cron_job(add_job,cron_expr=cron_exp,kwargs={'task': task},job_id=str(task.id),tag="定时采集")
         print(f"已添加任务: {job_id}")
+    if requested_job_id is None:
+        start_frequency_jobs()
     scheduler.start()
     print("启动任务")
 def start_fix_article():

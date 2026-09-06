@@ -124,7 +124,7 @@ article:
 gather:
   #是否采集内容  默认False
   content: ${GATHER.CONTENT:-False}
-  #采集模式，web模式（可采集到发布链接)，api模式（可采集临时链接），app模式（采集最新消息）
+  #采集模式：web（公众号平台发布链接）、api（临时链接）、app（最新消息）、weread（微信读书书架）
   model: ${GATHER.MODEL:-web}
   #是否自动检查未采集文章内容，默认False
   content_auto_check: ${GATHER.CONTENT_AUTO_CHECK:-True}
@@ -146,6 +146,13 @@ gather:
   clean_html: ${GATHER.CLEAN_HTML:-False}
   #浏览器类型 默认firefox 允许值 firefox/edge/webkit
   browser_type: ${BROWSER_TYPE:-firefox}
+
+#微信读书网页采集配置。Cookie 属于敏感信息，只通过环境变量或本地 config.yaml 提供。
+weread:
+  cookie: ${WEREAD_COOKIE:-}
+  timeout: ${WEREAD_TIMEOUT:-30}
+  login_timeout: ${WEREAD_LOGIN_TIMEOUT:-300}
+  browser_type: ${WEREAD_BROWSER_TYPE:-firefox}
 
 #代理配置
 proxy:

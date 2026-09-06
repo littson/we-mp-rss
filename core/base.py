@@ -1,7 +1,10 @@
 import requests
 from core.ver import *
 try:
-    response = requests.get('https://api.github.com/repos/rachelos/we-mp-rss/releases/latest')
+    response = requests.get(
+        'https://api.github.com/repos/rachelos/we-mp-rss/releases/latest',
+        timeout=10,
+    )
     response.raise_for_status()  # 检查请求是否成功
     data = response.json()
     LATEST_VERSION = data.get('tag_name', '').replace('v', '')

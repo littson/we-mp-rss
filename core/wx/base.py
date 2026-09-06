@@ -62,6 +62,9 @@ class WxGather:
         elif type=="web":
             from core.wx.model.web import MpsWeb
             wx=MpsWeb()
+        elif type=="weread":
+            from core.wx.model.weread import MpsWeread
+            wx=MpsWeread()
         else:
             from core.wx.model.api import MpsApi
             wx=MpsApi()
@@ -171,8 +174,10 @@ class WxGather:
             proxies = self._get_proxies()
             r = session.get(url, headers=headers, proxies=proxies) #type: ignore
             if r.status_code == 200:
-                text = r.text
-                text=self.remove_common_html_elements(text)
+                from core.wx.content import parse_article_content
+                text = parse_article_content(r.text)
+                if text is None:
+                    text = self.remove_common_html_elements(r.text)
         except:
             pass
         return text

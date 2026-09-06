@@ -1,11 +1,15 @@
+import base64
+import json
 from logging import info
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query, Body, UploadFile, File
 from fastapi.responses import FileResponse
 from fastapi.background import BackgroundTasks
+from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from core.auth import get_current_user_or_ak
 from core.db import DB
-from core.wx import search_Biz
-from driver.wx import Wx
 from .base import success_response, error_response
 from datetime import datetime
 from core.config import cfg
@@ -17,9 +21,196 @@ import io
 import os
 from jobs.article import UpdateArticle
 from driver.wxarticle import WXArticleFetcher
+from core.wx.model.weread import MpsWeread
 import threading
 from uuid import uuid4
 router = APIRouter(prefix=f"/mps", tags=["公众号管理"])
+
+
+class MpConfirmRequest(BaseModel):
+    mp_name: str = Field(..., min_length=1, max_length=255)
+    mp_id: str = Field(..., min_length=1, max_length=255)
+    avatar: Optional[str] = Field(None, max_length=500)
+    mp_cover: Optional[str] = Field(None, max_length=500)
+    mp_intro: Optional[str] = Field(None, max_length=255)
+
+
+class ArticleSubscriptionRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=2000)
+
+
+def _format_unix_timestamp(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value)).isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _rss_url(mp_id: str, request: Optional[Request] = None):
+    base_url = str(
+        cfg.get("rss.base_url", cfg.get("rss_base_url", "")) or ""
+    ).rstrip("/")
+    if not base_url and request is not None:
+        base_url = str(request.base_url).rstrip("/")
+    return f"{base_url}/rss/{mp_id}" if base_url else f"/rss/{mp_id}"
+
+
+def _serialize_mp(mp):
+    from jobs.feed_frequency import normalize_frequency
+    recent_update_time = mp.update_time or mp.sync_time
+    return {
+        "id": mp.id,
+        "mp_name": mp.mp_name,
+        "mp_cover": mp.mp_cover,
+        "mp_intro": mp.mp_intro,
+        "status": mp.status,
+        "frequency": normalize_frequency(getattr(mp, "frequency", None)),
+        "recent_update_time": recent_update_time,
+        "recent_update_time_text": _format_unix_timestamp(recent_update_time),
+        "rss_url": _rss_url(mp.id),
+        "created_at": mp.created_at.isoformat() if mp.created_at else None,
+        "updated_at": mp.updated_at.isoformat() if mp.updated_at else None,
+    }
+
+
+def _search_item_payload(item: dict):
+    cover = item.get("round_head_img") or item.get("avatar") or item.get("mp_cover")
+    return {
+        "mp_name": item.get("nickname") or item.get("mp_name") or item.get("name"),
+        "mp_id": item.get("fakeid") or item.get("mp_id") or item.get("id"),
+        "avatar": cover,
+        "mp_cover": cover,
+        "mp_intro": item.get("signature") or item.get("mp_intro") or item.get("description"),
+    }
+
+
+def _task_mps_payload(feeds):
+    return [
+        {
+            "id": feed.id,
+            "mp_name": feed.mp_name,
+            "mp_cover": feed.mp_cover,
+            "mp_intro": feed.mp_intro,
+            "status": feed.status,
+            "created_at": feed.created_at.isoformat() if feed.created_at else None,
+        }
+        for feed in feeds
+    ]
+
+
+def sync_all_message_tasks(session):
+    from core.models.feed import Feed
+    from core.models.message_task import MessageTask
+    feeds = session.query(Feed).filter(Feed.id != FEATURED_MP_ID).order_by(
+        Feed.created_at.desc()
+    ).all()
+    payload = json.dumps(_task_mps_payload(feeds), ensure_ascii=False)
+    tasks = session.query(MessageTask).all()
+    changed = 0
+    for task in tasks:
+        if task.mps_id != payload:
+            task.mps_id = payload
+            changed += 1
+    return changed
+
+
+def _reload_scheduler_jobs():
+    try:
+        from jobs.mps import reload_job
+        reload_job()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("重载消息任务调度失败")
+
+
+def _decode_mp_id(value: str):
+    try:
+        return base64.b64decode(value).decode("utf-8")
+    except Exception:
+        return None
+
+
+def _confirm_mp_subscription(session, payload: MpConfirmRequest):
+    from core.models.feed import Feed
+    decoded_id = _decode_mp_id(payload.mp_id)
+    if not decoded_id:
+        return None, False
+    now = datetime.now()
+    cover = payload.avatar or payload.mp_cover
+    local_cover = str(save_avatar_locally(cover)) if cover else ""
+    internal_id = f"MP_WXS_{decoded_id}"
+    feed = session.query(Feed).filter(
+        or_(Feed.faker_id == payload.mp_id, Feed.id == internal_id)
+    ).first()
+    if feed:
+        feed.mp_name = payload.mp_name
+        if local_cover:
+            feed.mp_cover = local_cover
+        feed.mp_intro = payload.mp_intro
+        feed.updated_at = now
+        return feed, False
+    feed = Feed(
+        id=internal_id,
+        mp_name=payload.mp_name,
+        mp_cover=local_cover,
+        mp_intro=payload.mp_intro,
+        status=1,
+        frequency="daily",
+        created_at=now,
+        updated_at=now,
+        faker_id=payload.mp_id,
+        update_time=0,
+        sync_time=0,
+    )
+    session.add(feed)
+    return feed, True
+
+
+def _weread_payload(payload: MpConfirmRequest, profile: dict):
+    cover = profile.get("mp_cover") or payload.avatar or payload.mp_cover
+    return MpConfirmRequest(
+        mp_name=profile.get("mp_name") or payload.mp_name,
+        mp_id=payload.mp_id,
+        avatar=cover,
+        mp_cover=cover,
+        mp_intro=profile.get("mp_intro") or payload.mp_intro,
+    )
+
+
+def _subscribe_with_weread(session, payload: MpConfirmRequest, profile=None):
+    """校验微信读书资料、加入书架并创建或更新本地订阅。"""
+    decoded_id = _decode_mp_id(payload.mp_id)
+    if not decoded_id:
+        raise ValueError("公众号唯一ID无效")
+    book_id = f"MP_WXS_{decoded_id}"
+    weread = MpsWeread()
+    verified_profile = profile or weread.get_mp_profile(book_id)
+    if verified_profile.get("book_id") != book_id:
+        raise ValueError("微信读书公众号 ID 校验失败")
+    feed, created = _confirm_mp_subscription(
+        session,
+        _weread_payload(payload, verified_profile),
+    )
+    shelf = weread.add_missing_to_shelf([book_id])
+    changed_tasks = sync_all_message_tasks(session)
+    return feed, created, shelf, changed_tasks
+
+
+def _enqueue_initial_fetch(feed):
+    from core.queue import TaskQueue
+    from core.wx import WxGather
+    max_page = int(cfg.get("max_page", "2"))
+    TaskQueue.add_task(
+        WxGather().Model().get_Articles,
+        faker_id=feed.faker_id,
+        Mps_id=feed.id,
+        CallBack=UpdateArticle,
+        MaxPage=max_page,
+        Mps_title=feed.mp_name,
+        task_name=feed.mp_name,
+    )
 # import core.db as db
 # UPDB=db.Db("数据抓取")
 # def UpdateArticle(art:dict):
@@ -201,14 +392,28 @@ async def search_mp(
 ):
     session = DB.get_session()
     try:
-        result = search_Biz(kw,limit=limit,offset=offset)
+        from core.models.feed import Feed
+        query = session.query(Feed).filter(Feed.id != FEATURED_MP_ID)
+        if kw:
+            query = query.filter(Feed.mp_name.ilike(f"%{kw}%"))
+        total = query.count()
+        feeds = query.order_by(Feed.created_at.desc()).limit(limit).offset(offset).all()
+        items = [{
+            "nickname": feed.mp_name,
+            "fakeid": feed.faker_id,
+            "round_head_img": feed.mp_cover,
+            "signature": feed.mp_intro,
+        } for feed in feeds]
         data={
-            'list':result.get('list') if result is not None else [],
+            'list': [
+                {**item, "subscribe_payload": _search_item_payload(item)}
+                for item in (items or [])
+            ],
             'page':{
                 'limit':limit,
                 'offset':offset
             },
-            'total':result.get('total') if result is not None else 0
+            'total':total
         }
         return success_response(data)
     except Exception as e:
@@ -217,13 +422,15 @@ async def search_mp(
             status_code=status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
-                message=f"搜索公众号失败,请重新扫码授权！",
+                message="搜索项目内公众号失败",
             )
         )
+    finally:
+        session.close()
 
 @router.get("", summary="获取公众号列表")
 async def get_mps(
-    limit: int = Query(10, ge=1, le=100),
+    limit: int = Query(1000, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     kw: str = Query(""),
     status: int = Query(None, description="状态筛选: 1=启用, 0=停用, 不传=全部"),
@@ -239,14 +446,7 @@ async def get_mps(
             query = query.filter(Feed.status == status)
         total = query.count()
         mps = query.order_by(Feed.created_at.desc()).limit(limit).offset(offset).all()
-        mps_list = [{
-                "id": mp.id,
-                "mp_name": mp.mp_name,
-                "mp_cover": mp.mp_cover,
-                "mp_intro": mp.mp_intro,
-                "status": mp.status,
-                "created_at": mp.created_at.isoformat()
-            } for mp in mps]
+        mps_list = [_serialize_mp(mp) for mp in mps]
         return success_response({
             "list": mps_list,
             "page": {
@@ -265,6 +465,38 @@ async def get_mps(
                 message="获取公众号列表失败"
             )
         )
+
+
+@router.post("/confirm", summary="确认添加公众号订阅")
+async def confirm_mp_subscription(
+    payload: MpConfirmRequest = Body(...),
+    current_user: dict = Depends(get_current_user_or_ak),
+):
+    session = DB.get_session()
+    try:
+        feed, created, shelf, changed_tasks = _subscribe_with_weread(
+            session, payload
+        )
+        session.commit()
+        session.refresh(feed)
+        result = {
+            **_serialize_mp(feed),
+            "created": created,
+            "shelf": shelf,
+            "message_task_updated": changed_tasks,
+        }
+        _reload_scheduler_jobs()
+        if created:
+            _enqueue_initial_fetch(feed)
+        return success_response(result)
+    except Exception:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_201_CREATED,
+            detail=error_response(code=50001, message="确认添加公众号订阅失败"),
+        )
+    finally:
+        session.close()
 
 
 @router.post("/featured/article", summary="添加精选文章")
@@ -433,6 +665,16 @@ async def get_mp_by_article(
                     message="公众号不存在"
                 )
             )
+        mp_id = info.get("mp_id")
+        biz = (info.get("mp_info") or {}).get("biz")
+        if not mp_id or not biz:
+            raise ValueError("文章页面未返回公众号唯一 ID")
+        profile = MpsWeread().get_mp_profile(mp_id)
+        info["mp_info"] = {
+            "mp_name": profile["mp_name"],
+            "logo": profile.get("mp_cover") or (info.get("mp_info") or {}).get("logo", ""),
+            "biz": biz,
+        }
         return success_response(info)
     except Exception as e:
         print(f"获取公众号详情错误: {str(e)}")
@@ -443,6 +685,67 @@ async def get_mp_by_article(
                 message="请输入正确的公众号文章链接"
             )
         )
+
+
+@router.post(
+    "/by_article/subscribe",
+    summary="通过公众号文章链接新增订阅",
+)
+async def subscribe_mp_by_article(
+    request: Request,
+    payload: ArticleSubscriptionRequest = Body(...),
+    current_user: dict = Depends(get_current_user_or_ak),
+):
+    session = DB.get_session()
+    try:
+        identity = await WXArticleFetcher().get_mp_identity(payload.url)
+        mp_id = identity.get("mp_id")
+        mp_info = identity.get("mp_info") or {}
+        biz = mp_info.get("biz")
+        if not mp_id or not biz:
+            raise ValueError("无法识别文章所属公众号")
+        profile = MpsWeread().get_mp_profile(mp_id)
+        feed, created, shelf, changed_tasks = _subscribe_with_weread(
+            session,
+            MpConfirmRequest(
+                mp_name=profile["mp_name"],
+                mp_id=biz,
+                avatar=profile.get("mp_cover") or mp_info.get("logo"),
+                mp_intro=profile.get("mp_intro"),
+            ),
+            profile=profile,
+        )
+        session.commit()
+        session.refresh(feed)
+        _reload_scheduler_jobs()
+        if created:
+            _enqueue_initial_fetch(feed)
+        result = {
+            **_serialize_mp(feed),
+            "rss_url": _rss_url(feed.id, request),
+            "created": created,
+            "shelf_added": bool(shelf.get("added_count")),
+            "initial_fetch_queued": created,
+            "message_task_updated": changed_tasks,
+        }
+        return success_response(
+            result,
+            message="订阅添加成功" if created else "订阅已存在",
+        )
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(code=40001, message=str(exc)),
+        ) from exc
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(code=40002, message=str(exc)),
+        ) from exc
+    finally:
+        session.close()
 
 @router.post("", summary="添加公众号")
 async def add_mp(
@@ -455,57 +758,27 @@ async def add_mp(
 ):
     session = DB.get_session()
     try:
-        from core.models.feed import Feed
-        import time
-        now = datetime.now()
-        
-        import base64
-        mpx_id = base64.b64decode(mp_id).decode("utf-8")
-        local_avatar_path = f"{save_avatar_locally(avatar)}"
-        
-        # 检查公众号是否已存在
-        existing_feed = session.query(Feed).filter(Feed.faker_id == mp_id).first()
-        
-        if existing_feed:
-            # 更新现有记录
-            existing_feed.mp_name = mp_name
-            existing_feed.mp_cover = local_avatar_path
-            existing_feed.mp_intro = mp_intro
-            existing_feed.updated_at = now
-        else:
-            # 创建新的Feed记录
-            new_feed = Feed(
-                id=f"MP_WXS_{mpx_id}",
-                mp_name=mp_name,
-                mp_cover= local_avatar_path,
-                mp_intro=mp_intro,
-                status=1,  # 默认启用状态
-                created_at=now,
-                updated_at=now,
-                faker_id=mp_id,
-                update_time=0,
-                sync_time=0,
-            )
-            session.add(new_feed)
-           
+        payload = MpConfirmRequest(
+            mp_name=mp_name,
+            mp_id=mp_id,
+            avatar=avatar,
+            mp_cover=mp_cover,
+            mp_intro=mp_intro,
+        )
+        feed, created, shelf, changed_tasks = _subscribe_with_weread(
+            session, payload
+        )
         session.commit()
-        
-        feed = existing_feed if existing_feed else new_feed
-         #在这里实现第一次添加获取公众号文章
-        if not existing_feed:
-            from core.queue import TaskQueue
-            from core.wx import WxGather
-            Max_page=int(cfg.get("max_page","2"))
-            TaskQueue.add_task(WxGather().Model().get_Articles, faker_id=feed.faker_id, Mps_id=feed.id, CallBack=UpdateArticle, MaxPage=Max_page, Mps_title=mp_name, task_name=mp_name)
-            
+        session.refresh(feed)
+        _reload_scheduler_jobs()
+        if created:
+            _enqueue_initial_fetch(feed)
         return success_response({
-            "id": feed.id,
-            "mp_name": feed.mp_name,
-            "mp_cover": feed.mp_cover,
-            "mp_intro": feed.mp_intro,
-            "status": feed.status,
-            "faker_id":mp_id,
-            "created_at": feed.created_at.isoformat()
+            **_serialize_mp(feed),
+            "faker_id": mp_id,
+            "created": created,
+            "shelf": shelf,
+            "message_task_updated": changed_tasks,
         })
     except Exception as e:
         session.rollback()
@@ -537,11 +810,18 @@ async def delete_mp(
                 )
             )
         
+        from core.models.article import Article
+        session.query(Article).filter(Article.mp_id == mp_id).delete()
         session.delete(mp)
+        changed_tasks = sync_all_message_tasks(session)
         session.commit()
+        _reload_scheduler_jobs()
+        from core.rss import RSS
+        RSS(mp_id).clear_cache(mp_id)
         return success_response({
             "message": "订阅号删除成功",
-            "id": mp_id
+            "id": mp_id,
+            "message_task_updated": changed_tasks,
         })
     except Exception as e:
         session.rollback()

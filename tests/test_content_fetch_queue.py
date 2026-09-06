@@ -121,15 +121,52 @@ class ContentFetchQueueTest(unittest.TestCase):
     def test_legacy_table_gets_fetch_started_at_column(self):
         engine = create_engine("sqlite:///:memory:")
         with engine.begin() as connection:
-            connection.execute(text("CREATE TABLE articles (id VARCHAR(255) PRIMARY KEY)"))
+            connection.execute(text(
+                "CREATE TABLE articles ("
+                "id VARCHAR(255) PRIMARY KEY, content TEXT)"
+            ))
+            connection.execute(text(
+                "INSERT INTO articles (id, content) "
+                "VALUES ('with-content', '<p>existing</p>'), ('empty', '')"
+            ))
 
         database = fetch_no_article.db.Db.__new__(fetch_no_article.db.Db)
         database.engine = engine
         database.tag = "test"
         database.ensure_article_columns()
+        database.ensure_article_columns()
 
         columns = {column["name"] for column in inspect(engine).get_columns("articles")}
-        self.assertIn("fetch_started_at", columns)
+        expected_columns = {
+            "extinfo",
+            "create_time",
+            "publish_type",
+            "publish_src",
+            "publish_status",
+            "art_type",
+            "show_type",
+            "publish_info",
+            "original_check_type",
+            "in_profile",
+            "pre_publish_status",
+            "service_type",
+            "item_show_type",
+            "copyright_stat",
+            "has_red_packet_cover",
+            "updated_at_millis",
+            "is_read",
+            "is_favorite",
+            "fix_fail_count",
+            "content_html",
+            "has_content",
+            "fetch_started_at",
+        }
+        self.assertTrue(expected_columns.issubset(columns))
+        with engine.connect() as connection:
+            rows = dict(connection.execute(text(
+                "SELECT id, has_content FROM articles ORDER BY id"
+            )).all())
+        self.assertEqual(rows, {"empty": 0, "with-content": 1})
         engine.dispose()
 
     def test_empty_fetch_increments_failure_and_releases_lock(self):
