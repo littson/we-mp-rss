@@ -39,6 +39,17 @@ export interface MpSearchResult {
   data: MpItem[]
 }
 
+export interface ArticleSubscriptionResult {
+  id: string
+  mp_name: string
+  mp_cover: string
+  mp_intro: string
+  rss_url: string
+  created: boolean
+  shelf_added: boolean
+  initial_fetch_queued: boolean
+}
+
 export interface FeaturedArticleTask {
   task_id: string
   url: string
@@ -71,6 +82,10 @@ export const addSubscription = (data: AddSubscriptionParams) => {
 }
 export const getSubscriptionInfo = (url: string) => {
   return http.post<{code: number, message: string}>(`/wx/mps/by_article?url=${url}`)
+}
+
+export const subscribeByArticle = (url: string) => {
+  return http.post<ArticleSubscriptionResult>('/wx/mps/by_article/subscribe', { url })
 }
 
 export const addFeaturedArticle = (data: { url: string }) => {

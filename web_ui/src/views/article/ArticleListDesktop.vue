@@ -16,6 +16,10 @@
               <template #content>
                 <a-doption @click="showAddModal"><template #icon><icon-plus /></template>添加公众号</a-doption>
                 <a-doption @click="showAddFeaturedArticleModal"><template #icon><icon-link /></template>添加精选文章</a-doption>
+                <a-doption @click="handleAddAllToWeread" :disabled="addingAllToWeread">
+                  <template #icon><TextIcon text="微" /></template>
+                  {{ addingAllToWeread ? '正在加入微信读书' : '全部加入微信读书' }}
+                </a-doption>
                 <a-doption @click="exportMPS"><template #icon><icon-export /></template>导出公众号</a-doption>
                 <a-doption @click="importMPS"><template #icon><icon-import /></template>导入公众号</a-doption>
                 <a-doption @click="exportOPML"><template #icon><icon-share-external /></template>导出OPML</a-doption>
@@ -361,6 +365,7 @@ import router from '@/router'
 import { deleteMpApi } from '@/api/subscription'
 import TextIcon from '@/components/TextIcon.vue'
 import { ProxyImage } from '@/utils/constants'
+import { addAllWereadShelfBooks } from '@/api/weread'
 
 const articles = ref([])
 const FEATURED_MP_ID = 'MP_WXS_FEATURED_ARTICLES'
@@ -387,6 +392,22 @@ const mpSearchText = ref('')
 const articleFilterType = ref('') // 单选筛选: 'favorite' | 'has_content' | 'no_content' | 'updating' | 'deleted'
 const featuredArticleModalVisible = ref(false)
 const featuredArticleUrl = ref('')
+const addingAllToWeread = ref(false)
+
+const handleAddAllToWeread = async () => {
+  if (addingAllToWeread.value) return
+  addingAllToWeread.value = true
+  try {
+    const result = await addAllWereadShelfBooks()
+    Message.success(
+      `微信读书书架处理完成：新增 ${result.added_count} 个，已存在 ${result.existing_count} 个，跳过 ${result.skipped_count || 0} 个`
+    )
+  } catch (error) {
+    Message.error(String(error || '全部加入微信读书失败'))
+  } finally {
+    addingAllToWeread.value = false
+  }
+}
 
 const pagination = ref({
   current: 1,

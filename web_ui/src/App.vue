@@ -9,6 +9,9 @@
           <a-tooltip v-if="hasLogined" :content="!haswxLogined ? '未授权，请扫码登录' : '点我扫码授权'" position="bottom" :default-popup="!haswxLogined">
             <icon-scan @click="showAuthQrcode()" :style="{ marginLeft: '10px', cursor: 'pointer', color: !haswxLogined ? '#f00' : '#000' }"/>
           </a-tooltip>
+          <a-tooltip v-if="hasLogined" :content="hasWereadLogined ? '微信读书已授权' : '微信读书未授权'" position="bottom">
+            <icon-book @click="showWereadAuthQrcode()" :style="{ marginLeft: '10px', cursor: 'pointer', color: hasWereadLogined ? '#000' : '#f00' }"/>
+          </a-tooltip>
         </div>
         <a-space>
             <a-select :defaultValue="currentLanguage" v-model:value="currentLanguage" @change="handleLanguageChange" >
@@ -179,6 +182,10 @@
               <template #icon><icon-scan /></template>
               扫码授权
             </a-doption>
+            <a-doption @click="showWereadAuthQrcode">
+              <template #icon><icon-book /></template>
+              微信读书授权
+            </a-doption>
             <a-doption @click="handleLogout">
               <template #icon><icon-user /></template>
               退出登录
@@ -223,6 +230,7 @@
           </div>
         </a-modal>
         <WechatAuthQrcode ref="qrcodeRef" @success="handleQrAuthSuccess" />
+        <WereadAuthQrcode ref="wereadQrcodeRef" @success="handleWereadQrAuthSuccess" />
         <a-modal v-model:visible="sponsorVisible" title="感谢支持" :footer="false" :style="{ zIndex: 1000 }" unmount-on-close>
           <div style="text-align: center;">
             <p>如果您觉得这个项目对您有帮助,请给Rachel来一杯Coffee吧~ </p>
@@ -275,6 +283,8 @@ import { Message } from '@arco-design/web-vue'
 import { getCurrentUser } from '@/api/auth'
 import { logout } from '@/api/auth'
 import WechatAuthQrcode from '@/components/WechatAuthQrcode.vue'
+import WereadAuthQrcode from '@/components/WereadAuthQrcode.vue'
+import { getWereadLoginStatus } from '@/api/weread'
 
 const qrcodeRef = ref()
 const showAuthQrcode = () => {
@@ -284,6 +294,15 @@ const showAuthQrcode = () => {
 const handleQrAuthSuccess = () => {
   haswxLogined.value = true
   Message.success('微信授权成功')
+}
+const wereadQrcodeRef = ref()
+const hasWereadLogined = ref(false)
+const showWereadAuthQrcode = () => {
+  wereadQrcodeRef.value?.startAuth()
+}
+const handleWereadQrAuthSuccess = () => {
+  hasWereadLogined.value = true
+  Message.success('微信读书授权成功')
 }
 provide('showAuthQrcode', showAuthQrcode)
 const appTitle = computed(() => import.meta.env.VITE_APP_TITLE || '微信公众号订阅助手')
@@ -320,6 +339,15 @@ const fetchSysInfo = async () => {
     wxLoginInfo.value = res?.wx?.info||null
   } catch (error) {
     console.error('获取系统信息失败', error)
+  }
+}
+
+const fetchWereadStatus = async () => {
+  try {
+    const status = await getWereadLoginStatus()
+    hasWereadLogined.value = Boolean(status?.login_status)
+  } catch (error) {
+    hasWereadLogined.value = false
   }
 }
 
@@ -368,6 +396,7 @@ onMounted(() => {
   initBrowserNotification()
   translatePage();
   fetchSysInfo();
+  fetchWereadStatus();
 })
 import { translatePage, setCurrentLanguage } from '@/utils/translate';
 

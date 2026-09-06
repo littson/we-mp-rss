@@ -8,22 +8,6 @@
     />
     
     <a-card>
-      <a-space direction="vertical" size="large">
-        <a-space>
-          <a-link @click="openDialog()">通过公众号码文章获取</a-link>
-        </a-space>
-      </a-space>
-
- <div v-if="modalVisible">
-    <a-input
-      v-model="articleLink"
-      placeholder="请输入一个公众号文章链接地址"
-      style="width: 300px; margin-bottom: 10px;"
-    />
-    <a-button @click="handleGetMpInfo" :loading="isFetching">获取</a-button>
-  </div>
-
-
       <a-form
         ref="formRef"
         :model="form"
@@ -31,48 +15,18 @@
         layout="vertical"
         @submit="handleSubmit"
       >
-        <a-form-item label="公众号名称" field="name">
-          <a-space>
-            <a-select
-              v-model="form.name"
-              placeholder="请输入公众号名称"
-              allow-clear
-              allow-search
-              @search="handleSearch"
-            >
-            <a-option v-for="item of searchResults" :value="item.nickname" :label="item.nickname" @click="handleSelect(item)" />
-          </a-select>
-          </a-space>
-        </a-form-item>
-        
-        <a-form-item label="头像" field="avatar">
-          <a-avatar 
-          :src=avatar_url
-            v-model="form.avatar"
-            placeholder="头像"
-          >
-          <img :src="avatar_url" width="80"/>
-          </a-avatar>
-        </a-form-item>
-        <a-form-item label="公众号ID" field="accountId">
+        <a-alert type="info" style="margin-bottom: 20px">
+          粘贴该公众号任意一篇文章链接。系统会识别公众号、加入微信读书书架并创建 RSS 订阅。
+        </a-alert>
+        <a-form-item label="公众号文章链接" field="url">
           <a-input
-            readonly='readonly'
-            v-model="form.wx_id"
-            placeholder="请输入公众号ID"
+            v-model="form.url"
+            placeholder="https://mp.weixin.qq.com/s/..."
+            allow-clear
           >
-            <template #prefix><icon-idcard /></template>
+            <template #prefix><icon-link /></template>
           </a-input>
         </a-form-item>
-        
-        <a-form-item label="描述" field="description">
-          <a-textarea
-            v-model="form.description"
-            placeholder="请输入公众号描述"
-            :auto-size="{ minRows: 3, maxRows: 5 }"
-            allow-clear
-          />
-        </a-form-item>
-        
         <a-form-item>
           <a-space>
             <a-button type="primary" html-type="submit" :loading="loading">
@@ -87,114 +41,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Message, Modal } from '@arco-design/web-vue'
-import { addSubscription,AddSubscriptionParams, searchBiz,getSubscriptionInfo } from '@/api/subscription'
-import {Avatar} from '@/utils/constants'
+import { Message } from '@arco-design/web-vue'
+import { subscribeByArticle } from '@/api/subscription'
 const router = useRouter()
 const loading = ref(false)
-const isFetching = ref(false)
-const searchResults = ref([])
-const avatar_url = ref('/static/default-avatar.png')
 const formRef = ref(null)
 const form = ref({
-  name: '',
-  wx_id: '',
-  avatar:'',
-  description: ''
+  url: '',
 })
 
-// 监听 form.avatar 的变化
-watch(() => form.value.avatar, (newValue, oldValue) => {
-  console.log('头像地址已更新:', newValue);
-  // 这里可以添加更多处理逻辑
-  avatar_url.value=Avatar(newValue)
-}, { deep: true });
-
 const rules = {
-  name: [
-    { required: true, message: '请输入公众号名称' },
-    { min: 2, max: 30, message: '公众号名称长度应在2-30个字符之间' }
-  ],
-  wx_id: [
-    { required: true, message: '请输入公众号ID' },
-    { pattern: /^[a-zA-Z0-9_-]+$/, message: '公众号ID只能包含字母、数字、下划线和横线' }
-  ],
-  avatar: [
-    { 
-      required: true, 
-      message: '请选择公众号头像',
-      validator: (value: string) => {
-        return value && value.startsWith('http')
-      },
-      message: '请选择有效的头像URL'
-    }
-  ],
-  description: [
-    { max: 200, message: '描述不能超过200个字符' }
+  url: [
+    { required: true, message: '请输入公众号文章链接' },
+    {
+      pattern: /^https?:\/\/mp\.weixin\.qq\.com\/s\//,
+      message: '请输入有效的公众号文章链接',
+    },
   ]
 }
 
-const handleSearch = async (value: string) => {
-  if (!value) {
-    searchResults.value = []
-    return
-  }
-  try {
-    const res = await searchBiz(value, {
-      kw: value,
-      offset: 0,
-      limit: 10
-    })
-    searchResults.value = res.list || []
-  } catch (error) {
-    // Message.error('搜索公众号失败')
-    searchResults.value = []
-  }
-}
-
-const handleGetMpInfo = async () => {
-  if (isFetching.value) return false;
-  if (!articleLink.value) {
-    Message.error('请提供一个公众号文章链接');
-    return false;
-  }
-  isFetching.value = true;
-  try {
-    const res = await getSubscriptionInfo(articleLink.value.trim()); // 确保去除空格
-    console.log('获取公众号信息:', res);
-    const info=res?.mp_info||false
-    if (info) {
-      form.value.name = info.mp_name || '';
-      form.value.description = info.mp_name || '';
-      form.value.wx_id = info.biz || '';
-      form.value.avatar = info.logo || '';
-    }
-  } catch (error) {
-    console.error('获取公众号信息失败:', error);
-    Message.error('获取公众号信息失败');
-    return false;
-  } finally {
-    isFetching.value = false;
-  }
-  modalVisible.value = false;
-  return true;
-}
-
-const handleSelect = (item: any) => {
-  console.log(item)
-  form.value.name = item.nickname
-  form.value.wx_id = item.fakeid // 修正拼写错误：fackid → fakeid
-  form.value.description = item.signature
-  form.value.avatar = item.round_head_img
-}
-
 const handleSubmit = async () => {
-  
   loading.value = true
-  
-  // 表单验证
   try {
     await formRef.value.validate()
   } catch (error) {
@@ -203,16 +72,9 @@ const handleSubmit = async () => {
     return
   }
 
-  // 表单提交
   try {
-    await addSubscription({
-      mp_name: form.value.name,
-      mp_id: form.value.wx_id,
-      avatar: form.value.avatar,
-      mp_intro: form.value.description,
-    })
-    
-    Message.success('订阅添加成功')
+    const result = await subscribeByArticle(form.value.url.trim())
+    Message.success(result.created ? '订阅添加成功' : '订阅已存在')
     router.push('/')
   } catch (error) {
     console.error('订阅添加失败:', error)
@@ -223,23 +85,8 @@ const handleSubmit = async () => {
 }
 
 const resetForm = () => {
-  form.value = {
-    name: '',
-    accountId: '',
-    rssUrl: '',
-    category: '',
-    description: ''
-  }
-  searchResults.value = []
+  form.value = { url: '' }
 }
-
-const modalVisible = ref(false);
-const articleLink = ref('');
-
-const openDialog = () => {
-  modalVisible.value = true;
-};
-
 
 const goBack = () => {
   router.go(-1)

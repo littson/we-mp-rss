@@ -43,8 +43,8 @@ export const QRCode = () => {
     qrCodeCounter = 0;
     
     http.get('/wx/auth/qr/code').then(res => {
-      const maxAttempts = 500;
-      qrCodeIntervalId = setInterval(() => {
+      const maxAttempts = 60;
+      qrCodeIntervalId = window.setInterval(async () => {
         qrCodeCounter++;
         if(qrCodeCounter > maxAttempts) {
           clearInterval(qrCodeIntervalId);
@@ -52,18 +52,31 @@ export const QRCode = () => {
           reject(new Error('获取二维码超时'));
           return;
         }
-        axios.head(res?.code).then(response => {
+        try {
+          const response = await axios.head(res?.code)
           if(response.status==200){
-            console.log(response)
             clearInterval(qrCodeIntervalId);
+            qrCodeIntervalId = 0;
             resolve(res)
+            return
           }
-        }).catch(err => {
+        } catch {
+          // 二维码生成期间静态文件尚不存在，继续检查后端任务状态。
+        }
+        try {
+          const status = await http.get('/wx/auth/qr/status')
+          if (status?.state === 'failed') {
+            clearInterval(qrCodeIntervalId);
+            qrCodeIntervalId = 0;
+            reject(new Error(status?.error || '获取二维码失败'))
+          }
+        } catch (err) {
           if(qrCodeCounter >= maxAttempts) {
             clearInterval(qrCodeIntervalId);
+            qrCodeIntervalId = 0;
             reject(err);
           }
-        })
+        }
       }, 1000)
     }).catch(reject)
   })
