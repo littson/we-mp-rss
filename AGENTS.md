@@ -6,6 +6,9 @@
 ## Build, Test, and Development Commands
 Install backend dependencies with `pip install -r requirements.txt`, then copy `config.example.yaml` to `config.yaml`. Run the full backend locally with `python main.py -job True -init True`; this starts FastAPI, jobs, and initialization hooks. Frontend development happens in `web_ui/`: `npm install`, `npm run dev`, and `npm run build`. For the MQTT helper in `qtserver/`, use `npm install` and `npm run start`. Docker development should read runtime settings from `/.env`; use `docker compose -f compose/docker-compose.dev.yaml up -d --force-recreate` and avoid hardcoding credentials or proxy settings in compose files.
 
+## Production Server Access
+The production server is available through the existing SSH alias `worker1_zerotier`. Use `ssh worker1_zerotier` when production data or logs need to be inspected. Treat production access as read-only unless the user explicitly authorizes a change.
+
 ## Coding Style & Naming Conventions
 Follow the existing style before introducing cleanup. Python uses 4-space indentation, snake_case for modules/functions, and grouped feature folders such as `core/notice/` and `apis/`. Vue files in `web_ui/src/views/` use PascalCase filenames like `AccessKeyManagement.vue`; composable utilities and API wrappers use camelCase or lower-case filenames such as `auth.ts` and `messageTask.ts`. There is no enforced formatter config in the repo, so keep imports tidy, avoid broad refactors, and match surrounding conventions.
 

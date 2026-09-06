@@ -1,0 +1,48 @@
+{
+  "run_id": "upstream-sync-20260730",
+  "started_at": "2026-07-30T09:58:17+08:00",
+  "updated_at": "2026-07-30T10:26:00+08:00",
+  "source": {
+    "local_branch": "dev",
+    "local_head": "060c4591c5efa9eed8b7ce2a71011ee050ccb43e",
+    "working_tree_changes": [
+      "core/wx/wx.py",
+      "core/wx/wx1.py",
+      "core/wx/wx2.py",
+      "core/wx/content.py",
+      "tests/test_wx_content.py"
+    ]
+  },
+  "target": {
+    "repository": "https://github.com/rachelos/we-mp-rss.git",
+    "branch": "main",
+    "commit": "cadb903555b05b5cc3fe855aa45815f9efd8f28c"
+  },
+  "current_stage": "complete",
+  "stage_status": "completed_with_manual_git_step",
+  "completed_items": [
+    "identified semantic merge base",
+    "measured 27 real merge conflicts",
+    "ran local baseline tests: 24 passed",
+    "created local customization inventory",
+    "created Git bundle and working-tree backup",
+    "switched candidate tree to upstream cadb903555b05b5cc3fe855aa45815f9efd8f28c",
+    "reapplied local API and adaptive scheduling behavior",
+    "added picture-article full-content parser",
+    "migrated legacy configuration with full-content collection enabled",
+    "backend tests: 25 passed",
+    "application route import check passed",
+    "web_ui npm ci and production build passed"
+  ],
+  "failed_items": [],
+  "skipped_items": [
+    "workspace .git metadata reset: sandbox grants read-only access to .git"
+  ],
+  "output_paths": [
+    "docs/migration/local-customizations-before-upstream.md",
+    "docs/migration/upstream-sync-checkpoint.json",
+    "docs/migration/upstream-sync-result.md"
+  ],
+  "backup_path": "/tmp/we-mp-rss-upstream-sync-backup-782FaI",
+  "resume_command": "Open docs/migration/upstream-sync-checkpoint.json and continue from current_stage"
+}
