@@ -17,10 +17,10 @@ def _database():
     return database, session_factory
 
 
-def _article(article_id, title, url, publish_time):
+def _article(article_id, title, url, publish_time, mp_id="MP_WXS_3073282833"):
     return {
         "id": article_id,
-        "mp_id": "MP_WXS_3073282833",
+        "mp_id": mp_id,
         "title": title,
         "url": url,
         "description": title,
@@ -31,13 +31,14 @@ def _article(article_id, title, url, publish_time):
     }
 
 
-def test_article_id_prefers_mid_and_idx_from_full_wechat_url():
+def test_article_id_scopes_mid_and_idx_to_mp():
     preferred, aliases = article_id_candidates(
         "MP_WXS_3073282833",
         "3073282833_short-token",
         "https://mp.weixin.qq.com/s?__biz=x&mid=2651047068&idx=2&sn=y",
     )
-    assert preferred == "2651047068_2"
+    assert preferred == "3073282833-2651047068_2"
+    assert "2651047068_2" in aliases
     assert "3073282833-3073282833_short-token" in aliases
 
 
@@ -123,3 +124,37 @@ def test_repeated_title_outside_time_tolerance_is_not_deduplicated():
     assert database.add_article(_article("second-token", "每周回顾", "", 100_000)) is True
     session = session_factory()
     assert session.query(Article).count() == 2
+
+
+def test_same_mid_and_idx_from_different_mps_do_not_collide():
+    database, session_factory = _database()
+    first_url = (
+        "https://mp.weixin.qq.com/s?__biz=first&mid=2247504999"
+        "&idx=1&sn=first"
+    )
+    second_url = (
+        "https://mp.weixin.qq.com/s?__biz=second&mid=2247504999"
+        "&idx=1&sn=second"
+    )
+
+    assert database.add_article(_article(
+        "MP_WXS_3928313808_first-token",
+        "第一公众号文章",
+        first_url,
+        1_766_925_990,
+        mp_id="MP_WXS_3928313808",
+    )) is True
+    assert database.add_article(_article(
+        "MP_WXS_3944641468_second-token",
+        "第二公众号文章",
+        second_url,
+        1_788_618_750,
+        mp_id="MP_WXS_3944641468",
+    )) is True
+
+    session = session_factory()
+    rows = session.query(Article).order_by(Article.mp_id).all()
+    assert [(row.id, row.mp_id) for row in rows] == [
+        ("3928313808-2247504999_1", "MP_WXS_3928313808"),
+        ("3944641468-2247504999_1", "MP_WXS_3944641468"),
+    ]

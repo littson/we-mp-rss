@@ -11,7 +11,7 @@ import requests
 
 from core.config import cfg
 from core.models.feed import Feed
-from core.print import print_info
+from core.print import print_info, print_warning
 from core.wx.base import WxGather
 from driver.weread_store import WereadStore
 
@@ -448,6 +448,14 @@ class MpsWeread(WxGather):
                 if isinstance(item, dict):
                     yield group, item
 
+    @staticmethod
+    def _review_matches_book(review_id, book_id):
+        review_id = str(review_id or "")
+        book_id = str(book_id or "")
+        return not review_id.startswith("MP_WXS_") or review_id.startswith(
+            f"{book_id}_"
+        )
+
     @classmethod
     def _normalize_doc_url(cls, url):
         value = html.unescape(str(url or "").strip())
@@ -572,6 +580,11 @@ class MpsWeread(WxGather):
                 if not review_id or review_id in seen:
                     continue
                 seen.add(review_id)
+                if not self._review_matches_book(review_id, book_id):
+                    print_warning(
+                        f"忽略其他公众号文章: {review_id}，当前公众号: {book_id}"
+                    )
+                    continue
                 review = item.get("review")
                 if not isinstance(review, dict) or not review.get("mpInfo"):
                     review = self._get_review(review_id)

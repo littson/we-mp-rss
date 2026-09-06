@@ -56,7 +56,7 @@ def article_id_candidates(mp_id: str, article_id: str, url: str = "") -> tuple[s
     link_id, _ = _wechat_link_identity(url)
 
     if link_id:
-        preferred_id = link_id
+        preferred_id = f"{prefix}-{link_id}" if prefix else link_id
     elif re.fullmatch(r"\d+_\d+", raw_id):
         preferred_id = raw_id
     elif raw_id.startswith((f"{prefix}_", f"{prefix}-")):
@@ -66,6 +66,7 @@ def article_id_candidates(mp_id: str, article_id: str, url: str = "") -> tuple[s
 
     aliases = {value for value in (
         preferred_id,
+        link_id,
         raw_id,
         f"{prefix}-{raw_id}" if prefix and raw_id else "",
     ) if value}
@@ -327,7 +328,10 @@ class Db:
                 conditions = [Article.id.in_(id_aliases)]
                 if art.url:
                     conditions.append(Article.url == art.url)
-                existing_article = session.query(Article).filter(or_(*conditions)).first()
+                existing_article = session.query(Article).filter(
+                    Article.mp_id == art.mp_id,
+                    or_(*conditions),
+                ).first()
                 if existing_article is None and art.title:
                     same_title_articles = session.query(Article).filter(
                         Article.mp_id == art.mp_id,

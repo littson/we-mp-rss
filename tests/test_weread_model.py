@@ -129,6 +129,36 @@ def test_weread_articles_map_to_existing_callback_contract():
     }
 
 
+def test_weread_skips_reviews_from_another_mp():
+    foreign_review = _review("MP_WXS_999_foreign-token")
+    foreign_review["mpInfo"]["mp_name"] = "其他公众号"
+    session_response = {
+        "reviews": [{
+            "createTime": 1710000000,
+            "subCount": 1,
+            "subReviews": [{
+                "reviewId": foreign_review["reviewId"],
+                "review": foreign_review,
+            }],
+        }],
+        "clearAll": 1,
+        "synckey": 1710000000,
+    }
+    model = _model([FakeResponse(payload=session_response)])
+    received = []
+
+    result = model.get_Articles(
+        Mps_id="MP_WXS_123",
+        Mps_title="测试公众号",
+        CallBack=lambda article: received.append(article) or True,
+        MaxPage=1,
+        interval=0,
+    )
+
+    assert result == []
+    assert received == []
+
+
 def test_weread_fetches_single_review_fallback_and_content(monkeypatch):
     list_response = {
         "reviews": [{
